@@ -173,7 +173,10 @@ use std::rc::Rc;
 use thiserror::Error;
 
 use self::{
-    grammar::{data_model::XpathItem, xpath},
+    grammar::{
+        data_model::{CapturedItem, XpathItem},
+        xpath,
+    },
     xpath_item_set::XpathItemSet,
 };
 
@@ -365,11 +368,58 @@ impl<'tree> XpathExpressionContext<'tree> {
         self.variables.get(name)
     }
 
-    /// Create a new context with multiple additional variable bindings.
-    pub fn with_variables_iter(
+    /// Capture all variable bindings currently in scope as owned snapshots.
+    ///
+    /// Used to implement closure semantics for inline functions: the returned
+    /// bindings reflect the definition-time variable context. Shadowing is
+    /// resolved the same way as variable lookup — the innermost binding for
+    /// each name wins.
+    pub(crate) fn capture_variables(&self) -> Vec<(String, Vec<CapturedItem>)> {
+        // Walk the scope chain from innermost to outermost, keeping the first
+        // binding seen for each name (mirrors `VariableScope::get`).
+        let mut captured: Vec<(String, Vec<CapturedItem>)> = Vec::new();
+        let mut scope = Some(&self.variables);
+        while let Some(current) = scope {
+            for (name, value) in current.bindings.iter().rev() {
+                if captured.iter().any(|(n, _)| n == name) {
+                    continue;
+                }
+                let items = value.iter().map(CapturedItem::from_xpath_item).collect();
+                captured.push((name.clone(), items));
+            }
+            scope = current.parent.as_ref();
+        }
+        captured
+    }
+
+    /// Create a new context for evaluating an inline function body.
+    ///
+    /// The variable scope consists of the definition-time `captured` bindings
+    /// (restored against this context's tree) with the call's parameter
+    /// `bindings` on top. The caller's variables are intentionally NOT
+    /// inherited — an inline function body can only see the variables that
+    /// were in scope where it was defined, plus its parameters.
+    ///
+    /// The focus (context item, position, size) is inherited from the caller,
+    /// matching the historical behavior of this evaluator.
+    pub(crate) fn with_closure_scope(
         &self,
+        captured: &[(String, Vec<CapturedItem>)],
         bindings: impl IntoIterator<Item = (String, XpathItemSet<'tree>)>,
     ) -> Self {
+        let captured_scope = Rc::new(VariableScope {
+            bindings: captured
+                .iter()
+                .map(|(name, items)| {
+                    let value: XpathItemSet<'tree> = items
+                        .iter()
+                        .map(|item| item.to_xpath_item(self.item_tree))
+                        .collect();
+                    (name.clone(), value)
+                })
+                .collect(),
+            parent: None,
+        });
         Self {
             item_tree: self.item_tree,
             item: self.item.clone(),
@@ -378,7 +428,7 @@ impl<'tree> XpathExpressionContext<'tree> {
             is_initial_step: self.is_initial_step,
             variables: Rc::new(VariableScope {
                 bindings: bindings.into_iter().collect(),
-                parent: Some(Rc::clone(&self.variables)),
+                parent: Some(captured_scope),
             }),
         }
     }

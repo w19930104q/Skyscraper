@@ -183,10 +183,15 @@ impl PrimaryExpr {
                         .as_ref()
                         .map(|e| e.to_string())
                         .unwrap_or_default();
+                    // Capture the definition-time variable bindings so the
+                    // function body sees them (closure semantics), no matter
+                    // where the function item is eventually invoked.
+                    let captured_variables = context.capture_variables();
                     Ok(xpath_item_set![XpathItem::Function(Function::Inline {
                         params,
                         body_source,
                         body: body_expr.map(Box::new),
+                        captured_variables,
                     })])
                 }
             },

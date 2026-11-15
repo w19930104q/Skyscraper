@@ -299,6 +299,7 @@ pub(crate) fn invoke_function_item<'tree>(
             params,
             body_source,
             body,
+            captured_variables,
         } => {
             if arg_values.len() != params.len() {
                 return Err(ExpressionApplyError::new(format!(
@@ -307,21 +308,37 @@ pub(crate) fn invoke_function_item<'tree>(
                     arg_values.len()
                 )));
             }
-            // Use cached body if available; otherwise re-parse from source.
+            // Evaluate the body in a scope built from the definition-time
+            // captured variables with the parameters bound on top — not in
+            // the caller's variable context.
             let bindings = params.iter().cloned().zip(arg_values);
-            let inner_context = context.with_variables_iter(bindings);
+            let inner_context = context.with_closure_scope(captured_variables, bindings);
+            // Locate errors to this function body so failures inside nested
+            // or repeatedly-invoked closures can be traced back to their source.
+            let locate = |e: ExpressionApplyError| {
+                ExpressionApplyError::new(format!(
+                    "In inline function body {{ {} }}: {}",
+                    body_source, e
+                ))
+            };
             if let Some(cached_body) = body {
-                cached_body.eval(&inner_context)
+                cached_body.eval(&inner_context).map_err(locate)
             } else if body_source.is_empty() {
                 Ok(XpathItemSet::new())
             } else {
-                let (_, body_expr) = expr(body_source).map_err(|e| {
+                let (rest, body_expr) = expr(body_source).map_err(|e| {
                     ExpressionApplyError::new(format!(
                         "Failed to parse inline function body '{}': {}",
                         body_source, e
                     ))
                 })?;
-                body_expr.eval(&inner_context)
+                if !rest.trim().is_empty() {
+                    return Err(ExpressionApplyError::new(format!(
+                        "Failed to parse inline function body '{}': unexpected trailing input: {:?}",
+                        body_source, rest
+                    )));
+                }
+                body_expr.eval(&inner_context).map_err(locate)
             }
         }
         Function::Map { .. } | Function::Array { .. } => {

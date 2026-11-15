@@ -297,6 +297,54 @@ impl OwnedXpathValue {
     }
 }
 
+/// An owned, tree-lifetime-independent snapshot of an [`XpathItem`].
+///
+/// Inline functions capture their definition-time variable bindings using
+/// this type so that the resulting [`Function`] item does not borrow from
+/// the evaluation tree. Node items are stored as arena [`NodeId`]s and
+/// re-resolved against the tree when the closure is invoked.
+///
+/// <https://www.w3.org/TR/2017/REC-xpath-31-20170321/#id-inline-func>
+#[derive(Debug, Clone)]
+pub enum CapturedItem {
+    /// An atomic value.
+    Atomic(AnyAtomicType),
+    /// A function item (which may itself capture variables).
+    Function(Function),
+    /// A node in the [`XpathItemTree`], stored as its arena [`NodeId`].
+    ///
+    /// `None` denotes the document node, which has no `NodeId` of its own
+    /// and is re-resolved to the tree's root node.
+    Node(Option<NodeId>),
+}
+
+impl CapturedItem {
+    /// Capture an [`XpathItem`] as an owned snapshot.
+    pub(crate) fn from_xpath_item(item: &XpathItem<'_>) -> Self {
+        match item {
+            XpathItem::AnyAtomicType(a) => CapturedItem::Atomic(a.clone()),
+            XpathItem::Function(f) => CapturedItem::Function(f.clone()),
+            XpathItem::Node(node) => CapturedItem::Node(node.node_id()),
+        }
+    }
+
+    /// Restore the captured item as an [`XpathItem`] borrowing from `tree`.
+    ///
+    /// This must be called with the same tree the item was captured from;
+    /// within a single [`Xpath::apply`](crate::xpath::Xpath::apply) evaluation
+    /// there is only ever one tree.
+    pub(crate) fn to_xpath_item<'tree>(&self, tree: &'tree XpathItemTree) -> XpathItem<'tree> {
+        match self {
+            CapturedItem::Atomic(a) => XpathItem::AnyAtomicType(a.clone()),
+            CapturedItem::Function(f) => XpathItem::Function(f.clone()),
+            CapturedItem::Node(node_id) => {
+                let id = node_id.unwrap_or(tree.root_node);
+                XpathItem::Node(tree.get(id))
+            }
+        }
+    }
+}
+
 /// <https://www.w3.org/TR/xpath-datamodel-31/#dt-function-item>
 #[derive(Debug, Clone)]
 pub enum Function {
@@ -311,8 +359,9 @@ pub enum Function {
     ///
     /// The body is cached as a parsed AST to avoid re-parsing each call.
     ///
-    /// Note: inline functions do not currently capture closure variables from the
-    /// definition scope. They evaluate using the caller's variable context.
+    /// Inline functions are closures: variables in scope at the point of
+    /// definition are captured in `captured_variables` and restored when the
+    /// function is invoked, regardless of the caller's variable context.
     Inline {
         /// The parameter names.
         params: Vec<String>,
@@ -320,6 +369,12 @@ pub enum Function {
         body_source: String,
         /// Cached parsed body expression. Populated at construction time.
         body: Option<Box<Expr>>,
+        /// Variables captured from the definition scope, innermost binding first.
+        ///
+        /// Stored as owned snapshots so the function item remains independent
+        /// of the evaluation tree lifetime; node items are re-resolved against
+        /// the tree when the function is invoked.
+        captured_variables: Vec<(String, Vec<CapturedItem>)>,
     },
     /// An XPath 3.1 map, e.g. `map { "x": 1, "y": 2 }`.
     ///

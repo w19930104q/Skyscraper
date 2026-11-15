@@ -87,10 +87,15 @@ impl FunctionCall {
 
             let body_source = format!("{}({})", self.name, body_args.join(", "));
             let body_parsed = expr(&body_source).ok().map(|(_, e)| Box::new(e));
+            // Capture the definition-time variables: concrete arguments may
+            // reference variables (e.g. `contains($x, ?)`) that must resolve
+            // to their values here, not at the eventual call site.
+            let captured_variables = context.capture_variables();
             return Ok(xpath_item_set![XpathItem::Function(Function::Inline {
                 params,
                 body_source,
                 body: body_parsed,
+                captured_variables,
             })]);
         }
 

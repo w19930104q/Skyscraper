@@ -10,6 +10,7 @@ mod xpath_tests {
     mod castable_tests;
     mod combining_sequences_tests;
     mod comparison_expression_tests;
+    mod closure_tests;
     mod contains_tests;
     mod for_expression_tests;
     mod function_item_tests;

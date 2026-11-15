@@ -85,7 +85,7 @@ All `*-from-duration`, `*-from-dateTime`, `*-from-date`, `*-from-time`, `fn:curr
 
 | Feature | Gap | Location |
 |---------|-----|----------|
-| Inline function closure capture | Inline functions (`function($x) { $x + $y }`) do not capture variables from the definition scope. The body is stored as source text and re-parsed at call time using the caller's variable context, not the definition-time context. Fixing this requires adding a `'tree` lifetime parameter to the `Function` enum to store captured `XpathItemSet` bindings, which cascades to ~94 occurrences across 8 files. | `src/xpath/grammar/data_model/mod.rs:147-148`, `src/xpath/grammar/expressions/postfix_expressions.rs:280-305`, `src/xpath/grammar/expressions/primary_expressions/mod.rs:171-189` |
+| Inline function focus | Inline functions capture definition-time variables (closure semantics), but the focus (context item, position, size) inside a function body is inherited from the caller rather than being undefined as the spec requires. | `src/xpath/mod.rs` (`XpathExpressionContext::with_closure_scope`) |
 
 ---
 
